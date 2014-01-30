@@ -13,7 +13,8 @@
     "node-haste": "git://github.com/facebook/node-haste.git",
     "source-map": "~0.1.22",
     "convert-source-map": "0.2.6",
-    "browser-builtins": "1.0.7"
+    "browser-builtins": "1.0.7",
+    "continuation-local-storage": "~3.0.0"
   },
   "author": {
     "name": "Lee Byron",
@@ -21,8 +22,8 @@
     "url": "http://github.com/leebyron"
   },
   "license": "Apache-2.0",
-  "repository" : {
-    "type" : "git",
-    "url" : "http://github.com/facebook/react-page-middleware.git"
+  "repository": {
+    "type": "git",
+    "url": "http://github.com/facebook/react-page-middleware.git"
   }
 }
