@@ -18,6 +18,16 @@ var DefaultRouter = require('./DefaultRouter');
 var Packager = require('./Packager');
 var TimingData = require('./TimingData');
 
+var requestStorage = require('./RequestStorage');
+
+var counter = (function(startCount){
+  var counter = startCount;
+  return function(){
+    return counter++;
+  }
+})(0);
+
+
 var fs = require('fs');
 var guard = require('./guard');
 var path = require('path');
@@ -57,8 +67,16 @@ var validateBuildConfig = function(buildConfig) {
  * TODO: We may need to call next here, if we want to allow something like a
  * gzip plugin.
  */
-function send(type, res, str, mtime) {
+function send(type, str, mtime) {
+
+  // pick up the res we stored at the start of our call chain and use it to serve the response
+  var res = requestStorage.get('res');
+
   res.setHeader('Date', new Date().toUTCString());
+  // get the counter from requestStorage and expose it in header 
+  // could also grab this anywhere in your call chain and will maintain its state.
+  // seriously.
+  res.setHeader('x-counter', requestStorage.get('timer'));
   // Always assume we had compiled something that may have changed.
   res.setHeader('Last-Modified', mtime || (new Date()).toUTCString());
   // Would like to set the content length but it isn't clear how to do that
@@ -76,38 +94,54 @@ exports.provide = function provide(buildConfig) {
    * that old module version, saving a module cache invalidation.
    */
   return function provideImpl(req, res, next) {
-    if (req.method !== 'GET') {
-      return next();
-    }
-    var router = buildConfig.router || DefaultRouter;
-    var decideRoute = router.decideRoute;
-    var routePackageHandler = router.routePackageHandler;
 
-    decideRoute(buildConfig, req.url, function(err, route) {
-      TimingData.data = {pageStart: Date.now()};
-      if (err || !route) {
-        return next(err);
+    next = requestStorage.bind(next);
+    requestStorage.run(function(){
+
+      requestStorage.set('timer', counter());
+      requestStorage.set('res', res);
+      requestStorage.set('req', req);
+
+      if (req.method !== 'GET') {
+        return next();
       }
-      if (!route.contentType || !route.rootModulePath) {
-        return next(new Error('Router must provide contentType and rootModulePath'));
-      }
-      var serveResult = guard(next, send.bind(null, route.contentType, res));
-      var onOutputGenerated = function(err, resultText) {
-        serveResult(err, resultText);
-      };
-      var onComputePackage = function(rootModuleID, ppackage) {
-        TimingData.data.findEnd = Date.now();
-        routePackageHandler(buildConfig, route, rootModuleID, ppackage, onOutputGenerated);
-      };
-      var packageOptions = {
-        buildConfig: buildConfig,
-        rootModuleAbsolutePath: path.join(buildConfig.pageRouteRoot || '', route.rootModulePath),
-        runtimeDependencies: REACT_RUNTIME_DEPENDENCIES.concat(
-          buildConfig.skipES5Shim ? [] : ES5_RUNTIME_DEPENDENCIES
-        )
-      };
-      var onComputePackageGuarded = guard(next, onComputePackage);
-      Packager.computePackageForAbsolutePath(packageOptions, onComputePackageGuarded);
+      var router = buildConfig.router || DefaultRouter;
+      var decideRoute = router.decideRoute;
+      var routePackageHandler = router.routePackageHandler;
+
+      decideRoute(buildConfig, req.url, function(err, route) {
+
+
+        
+
+        TimingData.data = {pageStart: Date.now()};
+        if (err || !route) {
+          return next(err);
+        }
+        if (!route.contentType || !route.rootModulePath) {
+          return next(new Error('Router must provide contentType and rootModulePath'));
+        }
+        var serveResult = guard(next, send.bind(null, route.contentType));
+        var onOutputGenerated = function(err, resultText) {
+          // bind the send function to the requestStorage, and execute it asynchronously
+          var boundSend = serveResult.bind(requestStorage, err, resultText);
+          process.nextTick(boundSend);
+          
+        };
+        var onComputePackage = function(rootModuleID, ppackage) {
+          TimingData.data.findEnd = Date.now();
+          routePackageHandler(buildConfig, route, rootModuleID, ppackage, onOutputGenerated);
+        };
+        var packageOptions = {
+          buildConfig: buildConfig,
+          rootModuleAbsolutePath: path.join(buildConfig.pageRouteRoot || '', route.rootModulePath),
+          runtimeDependencies: REACT_RUNTIME_DEPENDENCIES.concat(
+            buildConfig.skipES5Shim ? [] : ES5_RUNTIME_DEPENDENCIES
+          )
+        };
+        var onComputePackageGuarded = guard(next, onComputePackage);
+        Packager.computePackageForAbsolutePath(packageOptions, onComputePackageGuarded);
+      });
     });
   };
 };
